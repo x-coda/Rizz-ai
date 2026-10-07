@@ -18,8 +18,11 @@ button:disabled{opacity:.5}
 textarea,input[type=password],input[type=text]{width:100%;margin-top:10px;padding:12px;font-size:16px;border-radius:12px;border:none;background:#1a212b;color:#fff;box-sizing:border-box}
 textarea{height:200px}
 .status{margin-top:12px;color:#9aa4b2}
-.card{background:#1a212b;border-radius:12px;padding:16px;margin-top:12px;font-size:17px}
+.card{background:#1a212b;border-radius:12px;padding:16px;margin-top:12px;font-size:17px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .card.ok{background:#244a2f}
+.txt{flex:1}
+.star{width:auto;margin:0;padding:4px 8px;background:transparent;font-size:26px;color:#9aa4b2}
+.star.on{color:#ffd54a}
 details{background:#141a22;border-radius:12px;padding:12px;margin-bottom:12px}
 summary{font-size:16px;color:#9aa4b2}
 </style>
@@ -34,6 +37,10 @@ summary{font-size:16px;color:#9aa4b2}
 <button class="sec" id="saveSet">Save settings</button>
 <button class="sec" id="find">Find available models</button>
 <div id="models"></div>
+<textarea id="imp" style="height:90px" placeholder="Paste your old style lines here (from style.json)"></textarea>
+<button class="sec" id="impBtn">Import style lines</button>
+<button class="sec" id="expBtn">Copy my style (backup)</button>
+<div class="status" id="st2"></div>
 </details>
 
 <input type="file" id="file" accept="image/*" multiple style="display:none">
@@ -46,6 +53,12 @@ summary{font-size:16px;color:#9aa4b2}
 </div>
 <button class="sec" id="swap">Swap Me / Her</button>
 <button class="sec" id="saveStyle">Save my messages to my style</button>
+<button class="sec" id="saveChat">Save this chat</button>
+<button class="sec" id="clear">Clear</button>
+<button class="sec" id="showChats">Saved chats</button>
+<div id="chatList"></div>
+<button class="sec" id="analyze">Analyze chat</button>
+<div id="an"></div>
 <div class="status">Reply style:</div>
 <div id="chips"></div>
 <button id="write">Write Replies</button>
@@ -58,7 +71,12 @@ const S={
   get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 };
-const say=m=>{$('st').textContent=m};
+const say=m=>{$('st').textContent=m;$('st2').textContent=m};
+const load=k=>{try{return JSON.parse(S.get(k,'[]'))}catch(e){return[]}};
+const save=(k,v)=>S.set(k,JSON.stringify(v));
+const addUnique=(k,arr)=>save(k,[...new Set([...load(k),...arr])]);
+const pick=(a,n)=>[...a].sort(()=>Math.random()-.5).slice(0,n);
+const meLines=t=>t.split('\n').map(x=>x.trim()).filter(x=>/^me:/i.test(x)).map(x=>x.replace(/^me:\s*/i,'').trim()).filter(Boolean);
 const STYLES=['Mixed','Playful','Flirty','Funny','Confident','Nonchalant','Bold','Duke-inspired'];
 const GUIDES={
   Playful:'playful and fun, light teasing, keeping things easy and laughing together',
@@ -73,12 +91,12 @@ const READ_PROMPT="These are screenshots of a text conversation, in order. Trans
 let chosen='Mixed', files=[];
 
 $('key').value=S.get('key','');
-$('model').value=S.get('model','gemini-2.5-flash');
+$('model').value=S.get('model','gemini-3.8-flash');
 if(!S.get('key','')) $('settings').open=true;
 
 $('saveSet').onclick=()=>{
   S.set('key',$('key').value.trim());
-  S.set('model',$('model').value.trim()||'gemini-2.5-flash');
+  S.set('model',$('model').value.trim()||'gemini-3.8-flash');
   $('settings').open=false;
   say('Settings saved.');
 };
@@ -102,22 +120,46 @@ $('find').onclick=async()=>{
   }catch(e){say('Error: '+e.message)}
 };
 
+$('impBtn').onclick=()=>{
+  const raw=$('imp').value.trim();
+  if(!raw){say('Paste the lines first.');return}
+  let arr;
+  try{arr=JSON.parse(raw)}catch(e){arr=raw.split('\n')}
+  arr=(Array.isArray(arr)?arr:[]).map(x=>String(x).replace(/^me:\s*/i,'').trim()).filter(Boolean);
+  addUnique('mine',arr);
+  $('imp').value='';
+  say('Imported '+arr.length+'. Total in your style: '+load('mine').length);
+};
+
+$('expBtn').onclick=async()=>{
+  try{await navigator.clipboard.writeText(JSON.stringify(load('mine'),null,2));say('Copied your style. Paste it somewhere safe.')}
+  catch(e){say('Could not copy.')}
+};
+
 async function gemini(parts,temp){
   const key=S.get('key','');
   if(!key) throw new Error('Add your API key in Settings first');
-  const model=S.get('model','gemini-2.5-flash');
+  const model=S.get('model','gemini-3.8-flash');
   const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key);
-  const r=await fetch(url,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({contents:[{role:'user',parts:parts}],generationConfig:{temperature:temp}})
-  });
-  const d=await r.json();
-  if(!r.ok) throw new Error(d.error&&d.error.message||'Request failed');
-  const c=d.candidates&&d.candidates[0];
-  const t=c&&c.content&&c.content.parts?c.content.parts.map(p=>p.text||'').join(''):'';
-  if(!t) throw new Error('Empty answer. Try again.');
-  return t;
+  const body=JSON.stringify({contents:[{role:'user',parts:parts}],generationConfig:{temperature:temp}});
+  for(let i=0;i<4;i++){
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){
+      const c=d.candidates&&d.candidates[0];
+      const t=c&&c.content&&c.content.parts?c.content.parts.map(p=>p.text||'').join(''):'';
+      if(!t) throw new Error('Empty answer. Try again.');
+      return t;
+    }
+    const msg=(d.error&&d.error.message)||'Request failed';
+    const busy=r.status===503||r.status===429||/high demand|overloaded/i.test(msg);
+    if(busy&&i<3){
+      say('Google is busy. Retrying ('+(i+1)+'/3)...');
+      await new Promise(x=>setTimeout(x,3000*(i+1)));
+      continue;
+    }
+    throw new Error(msg);
+  }
 }
 
 function toB64(file){
@@ -166,12 +208,65 @@ $('swap').onclick=()=>{
   $('tr').value=$('tr').value.split('\n').map(l=>/^me:/i.test(l)?'Her:'+l.slice(3):/^her:/i.test(l)?'Me:'+l.slice(4):l).join('\n');
 };
 
-const mine=()=>{try{return JSON.parse(S.get('mine','[]'))}catch(e){return[]}};
 $('saveStyle').onclick=()=>{
-  const l=$('tr').value.split('\n').map(x=>x.trim()).filter(x=>/^me:/i.test(x)).map(x=>x.replace(/^me:\s*/i,'').trim()).filter(Boolean);
-  const all=[...new Set([...mine(),...l])];
-  S.set('mine',JSON.stringify(all));
-  say('Saved '+l.length+'. Total in your style: '+all.length);
+  const l=meLines($('tr').value);
+  addUnique('mine',l);
+  say('Saved '+l.length+'. Total in your style: '+load('mine').length);
+};
+
+$('saveChat').onclick=()=>{
+  const t=$('tr').value.trim();
+  if(!t){say('Nothing to save.');return}
+  const c=load('chats');
+  c.unshift({id:Date.now(),title:t.split('\n')[0].slice(0,40),text:t});
+  save('chats',c.slice(0,100));
+  say('Chat saved. Total: '+Math.min(c.length,100));
+};
+
+$('clear').onclick=()=>{
+  $('tr').value=''; $('out').innerHTML=''; $('an').innerHTML=''; say('');
+};
+
+$('showChats').onclick=()=>{
+  const box=$('chatList');
+  if(box.innerHTML){box.innerHTML='';return}
+  const c=load('chats');
+  if(!c.length){box.textContent='No saved chats yet.';return}
+  c.forEach(ch=>{
+    const card=document.createElement('div'); card.className='card';
+    const t=document.createElement('div'); t.className='txt'; t.textContent=ch.title;
+    const ok=document.createElement('button'); ok.className='star'; ok.textContent='✓';
+    ok.onclick=e=>{
+      e.stopPropagation();
+      const l=meLines(ch.text);
+      addUnique('stars',l); addUnique('mine',l);
+      ok.classList.add('on');
+      say('Marked as worked. Saved '+l.length+' of your messages as favorites.');
+    };
+    const del=document.createElement('button'); del.className='star'; del.textContent='✕';
+    del.onclick=e=>{
+      e.stopPropagation();
+      save('chats',load('chats').filter(x=>x.id!==ch.id));
+      card.remove();
+    };
+    card.append(t,ok,del);
+    card.onclick=()=>{$('tr').value=ch.text; box.innerHTML=''; window.scrollTo(0,0)};
+    box.appendChild(card);
+  });
+};
+
+$('analyze').onclick=async()=>{
+  const t=$('tr').value.trim();
+  if(!t){say('Paste or read a chat first.');return}
+  const b=$('analyze'); b.disabled=true; $('an').innerHTML=''; say('Analyzing...');
+  try{
+    const p='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.\n\n'+t+'\n\nRead only what is actually in the chat. Do not invent details. If there is not enough to tell, say "unclear". Answer in exactly these 5 lines, plain text, no extra words:\nMood: (her mood right now, under 10 words)\nInterest: (Low, Medium, or High, then the specific thing she said or did that shows it, under 20 words)\nHer last message means: (what she most likely meant, under 20 words)\nSuggested move: (one specific thing to do next, not general advice, under 20 words)\nExample text: (one short text I could send that fits that move, lowercase casual guy texting, max 12 words)';
+    const a=await gemini([{text:p}],0.4);
+    const c=document.createElement('div'); c.className='card'; c.style.whiteSpace='pre-wrap';
+    c.textContent=a.trim();
+    $('an').appendChild(c); say('');
+  }catch(e){say('Error: '+e.message)}
+  b.disabled=false;
 };
 
 STYLES.forEach(n=>{
@@ -196,6 +291,22 @@ function copy(text,card){
   }
 }
 
+function addCard(text){
+  const c=document.createElement('div'); c.className='card';
+  const t=document.createElement('div'); t.className='txt'; t.textContent=text;
+  const s=document.createElement('button'); s.className='star'; s.textContent='☆';
+  s.onclick=e=>{
+    e.stopPropagation();
+    if(s.classList.contains('on')) return;
+    addUnique('stars',[text]); addUnique('mine',[text]);
+    s.textContent='★'; s.classList.add('on');
+    say('Saved to your favorites.');
+  };
+  c.append(t,s);
+  c.onclick=()=>copy(text,c);
+  $('out').appendChild(c);
+}
+
 $('write').onclick=async()=>{
   const t=$('tr').value.trim();
   if(!t){say('Paste or read a chat first.');return}
@@ -206,25 +317,24 @@ $('write').onclick=async()=>{
   const task=lastMe
     ?'My last message was "'+lastText+'" and she has not answered yet. Write follow-up texts I could send next, keeping the chat going without sounding desperate.'
     :'Her last message was "'+lastText+'". Write texts I could send as my reply to that message.';
-  const ex=mine().sort(()=>Math.random()-.5).slice(0,12);
-  const exBlock=ex.length?'Examples of how I text. Use these ONLY to copy my voice (slang, length, attitude). Do NOT reuse their topics or jokes:\n'+ex.map(x=>'- '+x).join('\n')+'\n\n':'';
+  const stars=load('stars');
+  const st=pick(stars,5);
+  const rest=pick(load('mine').filter(x=>!stars.includes(x)),st.length?6:10);
+  let exBlock='';
+  if(st.length) exBlock+='My favorite texts that I loved and approved. Match this voice the most:\n'+st.map(x=>'- '+x).join('\n')+'\n\n';
+  if(rest.length) exBlock+='More examples of how I text. Use these ONLY to copy my voice (slang, length, attitude). Do NOT reuse their topics or jokes:\n'+rest.map(x=>'- '+x).join('\n')+'\n\n';
   const g=GUIDES[chosen];
   const vibe=g?'- All 6 texts should be '+g+'.':'- Mix of playful and teasing, confident and nonchalant, and one that gets her talking more.';
   const prompt='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.\n\n'+t+'\n\n'+exBlock+task+'\n\nRules:\n- Write 6 different texts, all from my side, as me talking to her. Never write her side.\n- Every text must react to what was just said in THIS conversation and stay on that topic.\n- Only 1 text may change the subject, and it must connect to something already mentioned.\n- Sound like a real guy texting: simple everyday words, max 12 words, lowercase is fine, no emojis, no cheesy or movie-style lines.\n'+vibe+'\n- If she mentions a boyfriend or seems uninterested, stay friendly and respectful and do not push.\n\nOutput ONLY the 6 texts, one per line. No intro, no numbers, no labels.';
   const b=$('write'); b.disabled=true; $('out').innerHTML=''; say('Writing '+chosen+' replies...');
   try{
     const text=await gemini([{text:prompt}],0.8);
-    const replies=text.split('\n')
+    text.split('\n')
       .map(l=>l.replace(/^\s*\d+[\.\)]\s*/,'').replace(/^\s*[-*•]\s*/,'').replace(/^["'“”]+|["'“”]+$/g,'').trim())
       .filter(l=>l&&!l.endsWith(':')&&!/^(okay|ok|sure|here|certainly|alright)\b/i.test(l))
-      .slice(0,5);
-    replies.forEach(r=>{
-      const c=document.createElement('div');
-      c.className='card'; c.textContent=r;
-      c.onclick=()=>copy(r,c);
-      $('out').appendChild(c);
-    });
-    say('Tap a reply to copy it.');
+      .slice(0,5)
+      .forEach(addCard);
+    say('Tap a reply to copy it. Tap ☆ to save it as a favorite.');
   }catch(e){say('Error: '+e.message)}
   b.disabled=false;
 };
