@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Rizz AI">
+<title>Rizz AI</title>
+<style>
+body{background:#0b0f14;color:#fff;font-family:-apple-system,sans-serif;margin:0;padding:20px}
+h1{margin-top:0}
+button{width:100%;padding:16px;font-size:18px;border:none;border-radius:12px;background:#6c3df5;color:#fff;margin-top:12px}
+button.sec{background:#2a3340;font-size:16px}
+button:disabled{opacity:.5}
+.row{display:flex;gap:10px}
+.chip{width:auto;padding:10px 16px;font-size:15px;margin:6px 8px 0 0;border-radius:20px;background:#2a3340}
+.chip.on{background:#6c3df5}
+textarea,input[type=password],input[type=text]{width:100%;margin-top:10px;padding:12px;font-size:16px;border-radius:12px;border:none;background:#1a212b;color:#fff;box-sizing:border-box}
+textarea{height:200px}
+.status{margin-top:12px;color:#9aa4b2}
+.card{background:#1a212b;border-radius:12px;padding:16px;margin-top:12px;font-size:17px}
+.card.ok{background:#244a2f}
+details{background:#141a22;border-radius:12px;padding:12px;margin-bottom:12px}
+summary{font-size:16px;color:#9aa4b2}
+</style>
+</head>
+<body>
+<h1>Rizz AI</h1>
+
+<details id="settings">
+<summary>Settings</summary>
+<input type="password" id="key" placeholder="Paste your Gemini API key">
+<input type="text" id="model" placeholder="Model name">
+<button class="sec" id="saveSet">Save settings</button>
+<button class="sec" id="find">Find available models</button>
+<div id="models"></div>
+</details>
+
+<input type="file" id="file" accept="image/*" multiple style="display:none">
+<button id="pick">Upload Screenshot(s)</button>
+<button class="sec" id="read" style="display:none">Read screenshot(s)</button>
+<textarea id="tr" placeholder="Her: hey&#10;Me: hey what's up"></textarea>
+<div class="row">
+<button class="sec" id="addHer">+ Her:</button>
+<button class="sec" id="addMe">+ Me:</button>
+</div>
+<button class="sec" id="swap">Swap Me / Her</button>
+<button class="sec" id="saveStyle">Save my messages to my style</button>
+<div class="status">Reply style:</div>
+<div id="chips"></div>
+<button id="write">Write Replies</button>
+<div class="status" id="st"></div>
+<div id="out"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const S={
+  get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v}catch(e){return d}},
+  set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+};
+const say=m=>{$('st').textContent=m};
+const STYLES=['Mixed','Playful','Flirty','Funny','Confident','Nonchalant','Bold','Duke-inspired'];
+const GUIDES={
+  Playful:'playful and fun, light teasing, keeping things easy and laughing together',
+  Flirty:'flirty and charming, a little suggestive but classy, making her smile',
+  Funny:'funny, with a joke or a witty twist that builds on what she said',
+  Confident:'confident and direct, calm and sure of myself, not needy',
+  Nonchalant:'nonchalant and relaxed, short and cool, like I am not trying too hard',
+  Bold:'bold and straightforward, making a clear move such as suggesting a plan',
+  'Duke-inspired':'confident, casual, short, teasing and nonchalant, like a relaxed guy who is not trying too hard'
+};
+const READ_PROMPT="These are screenshots of a text conversation, in order. Transcribe every text message as lines starting with 'Me:' or 'Her:', in order from top to bottom. My messages are on the RIGHT side in a blue or purple bubble. Her messages are on the LEFT side in a gray or dark bubble. Write each message once. Skip timestamps, photos, reactions, buttons, and the message box. Output only the lines, nothing else.";
+let chosen='Mixed', files=[];
+
+$('key').value=S.get('key','');
+$('model').value=S.get('model','gemini-2.5-flash');
+if(!S.get('key','')) $('settings').open=true;
+
+$('saveSet').onclick=()=>{
+  S.set('key',$('key').value.trim());
+  S.set('model',$('model').value.trim()||'gemini-2.5-flash');
+  $('settings').open=false;
+  say('Settings saved.');
+};
+
+$('find').onclick=async()=>{
+  const key=$('key').value.trim();
+  if(!key){say('Paste your key first.');return}
+  try{
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key='+encodeURIComponent(key));
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error&&d.error.message||'Could not list models');
+    const box=$('models'); box.innerHTML='';
+    (d.models||[]).filter(m=>/flash/i.test(m.name)&&(m.supportedGenerationMethods||[]).includes('generateContent')).forEach(m=>{
+      const n=m.name.replace('models/','');
+      const b=document.createElement('button');
+      b.className='sec'; b.textContent=n;
+      b.onclick=()=>{$('model').value=n};
+      box.appendChild(b);
+    });
+    say('Tap a model, then Save settings.');
+  }catch(e){say('Error: '+e.message)}
+};
+
+async function gemini(parts,temp){
+  const key=S.get('key','');
+  if(!key) throw new Error('Add your API key in Settings first');
+  const model=S.get('model','gemini-2.5-flash');
+  const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key);
+  const r=await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({contents:[{role:'user',parts:parts}],generationConfig:{temperature:temp}})
+  });
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.error&&d.error.message||'Request failed');
+  const c=d.candidates&&d.candidates[0];
+  const t=c&&c.content&&c.content.parts?c.content.parts.map(p=>p.text||'').join(''):'';
+  if(!t) throw new Error('Empty answer. Try again.');
+  return t;
+}
+
+function toB64(file){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const s=Math.min(1,1400/Math.max(img.width,img.height));
+      const c=document.createElement('canvas');
+      c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      URL.revokeObjectURL(img.src);
+      res(c.toDataURL('image/jpeg',0.85).split(',')[1]);
+    };
+    img.onerror=()=>rej(new Error('Could not open the image'));
+    img.src=URL.createObjectURL(file);
+  });
+}
+
+$('pick').onclick=()=>$('file').click();
+$('file').onchange=()=>{
+  files=[...$('file').files];
+  $('read').style.display=files.length?'block':'none';
+  say(files.length+' screenshot(s) ready. Tap Read screenshot(s).');
+};
+
+$('read').onclick=async()=>{
+  const b=$('read'); b.disabled=true; say('Reading...');
+  try{
+    const parts=[{text:READ_PROMPT}];
+    for(const f of files) parts.push({inlineData:{mimeType:'image/jpeg',data:await toB64(f)}});
+    $('tr').value=(await gemini(parts,0.1)).trim();
+    say('Check the chat. Fix any Me/Her mistakes.');
+  }catch(e){say('Error: '+e.message)}
+  b.disabled=false;
+};
+
+function label(l){
+  const t=$('tr'), p=t.selectionStart, bef=t.value.slice(0,p), aft=t.value.slice(p);
+  const ins=(bef&&!bef.endsWith('\n')?'\n':'')+l+' ';
+  t.value=bef+ins+aft; t.focus();
+  t.setSelectionRange(bef.length+ins.length,bef.length+ins.length);
+}
+$('addHer').onclick=()=>label('Her:');
+$('addMe').onclick=()=>label('Me:');
+$('swap').onclick=()=>{
+  $('tr').value=$('tr').value.split('\n').map(l=>/^me:/i.test(l)?'Her:'+l.slice(3):/^her:/i.test(l)?'Me:'+l.slice(4):l).join('\n');
+};
+
+const mine=()=>{try{return JSON.parse(S.get('mine','[]'))}catch(e){return[]}};
+$('saveStyle').onclick=()=>{
+  const l=$('tr').value.split('\n').map(x=>x.trim()).filter(x=>/^me:/i.test(x)).map(x=>x.replace(/^me:\s*/i,'').trim()).filter(Boolean);
+  const all=[...new Set([...mine(),...l])];
+  S.set('mine',JSON.stringify(all));
+  say('Saved '+l.length+'. Total in your style: '+all.length);
+};
+
+STYLES.forEach(n=>{
+  const b=document.createElement('button');
+  b.className='chip'+(n===chosen?' on':''); b.textContent=n;
+  b.onclick=()=>{
+    chosen=n;
+    document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+    b.classList.add('on');
+  };
+  $('chips').appendChild(b);
+});
+
+function copy(text,card){
+  const done=()=>{card.classList.add('ok');setTimeout(()=>card.classList.remove('ok'),1000)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>{});
+  }else{
+    const ta=document.createElement('textarea');
+    ta.value=text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta); done();
+  }
+}
+
+$('write').onclick=async()=>{
+  const t=$('tr').value.trim();
+  if(!t){say('Paste or read a chat first.');return}
+  const lines=t.split('\n').map(x=>x.trim()).filter(Boolean);
+  const last=lines[lines.length-1];
+  const lastMe=/^me:/i.test(last);
+  const lastText=last.replace(/^(me|her):\s*/i,'');
+  const task=lastMe
+    ?'My last message was "'+lastText+'" and she has not answered yet. Write follow-up texts I could send next, keeping the chat going without sounding desperate.'
+    :'Her last message was "'+lastText+'". Write texts I could send as my reply to that message.';
+  const ex=mine().sort(()=>Math.random()-.5).slice(0,12);
+  const exBlock=ex.length?'Examples of how I text. Use these ONLY to copy my voice (slang, length, attitude). Do NOT reuse their topics or jokes:\n'+ex.map(x=>'- '+x).join('\n')+'\n\n':'';
+  const g=GUIDES[chosen];
+  const vibe=g?'- All 6 texts should be '+g+'.':'- Mix of playful and teasing, confident and nonchalant, and one that gets her talking more.';
+  const prompt='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.\n\n'+t+'\n\n'+exBlock+task+'\n\nRules:\n- Write 6 different texts, all from my side, as me talking to her. Never write her side.\n- Every text must react to what was just said in THIS conversation and stay on that topic.\n- Only 1 text may change the subject, and it must connect to something already mentioned.\n- Sound like a real guy texting: simple everyday words, max 12 words, lowercase is fine, no emojis, no cheesy or movie-style lines.\n'+vibe+'\n- If she mentions a boyfriend or seems uninterested, stay friendly and respectful and do not push.\n\nOutput ONLY the 6 texts, one per line. No intro, no numbers, no labels.';
+  const b=$('write'); b.disabled=true; $('out').innerHTML=''; say('Writing '+chosen+' replies...');
+  try{
+    const text=await gemini([{text:prompt}],0.8);
+    const replies=text.split('\n')
+      .map(l=>l.replace(/^\s*\d+[\.\)]\s*/,'').replace(/^\s*[-*•]\s*/,'').replace(/^["'“”]+|["'“”]+$/g,'').trim())
+      .filter(l=>l&&!l.endsWith(':')&&!/^(okay|ok|sure|here|certainly|alright)\b/i.test(l))
+      .slice(0,5);
+    replies.forEach(r=>{
+      const c=document.createElement('div');
+      c.className='card'; c.textContent=r;
+      c.onclick=()=>copy(r,c);
+      $('out').appendChild(c);
+    });
+    say('Tap a reply to copy it.');
+  }catch(e){say('Error: '+e.message)}
+  b.disabled=false;
+};
+</script>
+</body>
+</html>
