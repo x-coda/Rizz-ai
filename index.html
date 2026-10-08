@@ -63,6 +63,8 @@ summary{font-size:16px;color:#9aa4b2}
 <div id="chatList"></div>
 <button class="sec" id="analyze">Analyze chat</button>
 <div id="an"></div>
+<div class="status">Goal:</div>
+<div id="goals"></div>
 <div class="status">Mode:</div>
 <div id="modes"></div>
 <div class="status">Reply style:</div>
@@ -93,9 +95,15 @@ const GUIDES={
   Bold:'bold and straightforward, making a clear move such as suggesting a plan',
   'Duke-inspired':'confident, casual, short, teasing and nonchalant, like a relaxed guy who is not trying too hard'
 };
+const GOALS={
+  'Keep chatting':'',
+  'Flirt more':'raise the flirty tension one notch above where the chat is now: more teasing, more playful interest in her, a bit of romantic spark (suggestive at most, never explicit)',
+  'Get her number / a call':'move the chat off this app naturally: suggest a call, a voice note, or swapping numbers in a casual, low-pressure way tied to something in the chat',
+  'Ask her out':'invite her to meet in person: suggest a specific, easy plan (coffee, a walk, food) tied to something she mentioned, with confidence and not neediness'
+};
 const READ_PROMPT="These are screenshots of a text conversation, in order. Transcribe everything in order from top to bottom, one item per line, each starting with 'Me:' or 'Her:'. My messages are on the RIGHT side in a blue or purple bubble. Her messages are on the LEFT side in a gray or dark bubble. Rules: Copy each text message exactly as written, keeping every emoji, heart, and spelling mistake (a message that is only an emoji is a normal message). When a bubble is a photo, video, reel, sticker, GIF, voice message or call, write it as '[photo: short description of what you see]', '[video: short description]', '[reel: caption if visible]', '[sticker: short description]', '[voice message]' or '[call: what it says]'. When describing people in photos, only say what is visible (clothing, setting, expression, what they are doing) and never guess who they are. If a person in a photo points at or looks into the camera, say 'pointing at the viewer' or 'looking at the viewer'. If a message has a reaction on it (like a heart), add '(reacted ' followed by the real emoji and ')' at the end of that line. Skip timestamps like 'Today 7:45 AM', buttons, and the message box. Output only the lines, nothing else.";
 const NOTE=' Anything in [square brackets] describes a photo, video or voice message, and "(reacted ...)" shows an emoji reaction. Never copy the brackets into my texts.';
-let chosen='Mixed', files=[], mode=S.get('mode','Pro rizz');
+let chosen='Mixed', goal='Keep chatting', files=[], mode=S.get('mode','Pro rizz');
 
 $('key').value=S.get('key','');
 $('model').value=S.get('model','gemini-3.8-flash');
@@ -285,7 +293,7 @@ $('analyze').onclick=async()=>{
   if(!t){say('Paste or read a chat first.');return}
   const b=$('analyze'); b.disabled=true; $('an').innerHTML=''; say('Analyzing...');
   try{
-    const p='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.'+NOTE+'\n\n'+t+'\n\n'+rulesText()+'Read only what is actually in the chat. Do not invent details. If there is not enough to tell, say "unclear". Answer in exactly these 5 lines, plain text, no extra words:\nMood: (her mood right now, under 10 words)\nInterest: (Low, Medium, or High, then the specific thing she said or did that shows it, under 20 words)\nHer last message means: (what she most likely meant, under 20 words)\nSuggested move: (one specific thing to do next, not general advice, under 20 words)\nExample text: (one clever, confident text I could send that fits that move)';
+    const p='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.'+NOTE+'\n\n'+t+'\n\n'+rulesText()+'Read only what is actually in the chat. Do not invent details. If there is not enough to tell, say "unclear". Answer in exactly these 6 lines, plain text, no extra words:\nMood: (her mood right now, under 10 words)\nInterest: (Low, Medium, or High, then the specific thing she said or did that shows it, under 20 words)\nHer last message means: (what she most likely meant, under 20 words)\nReady to escalate: (Yes, Almost, or Not yet, then why, under 20 words)\nSuggested move: (one specific thing to do next, not general advice, under 20 words)\nExample text: (one clever, confident text I could send that fits that move)';
     const a=await gemini([{text:p}],0.4);
     const c=document.createElement('div'); c.className='card'; c.style.whiteSpace='pre-wrap';
     c.textContent=a.trim();
@@ -293,6 +301,17 @@ $('analyze').onclick=async()=>{
   }catch(e){say('Error: '+e.message)}
   b.disabled=false;
 };
+
+Object.keys(GOALS).forEach(n=>{
+  const b=document.createElement('button');
+  b.className='chip'+(n===goal?' on':''); b.textContent=n;
+  b.onclick=()=>{
+    goal=n;
+    document.querySelectorAll('#goals .chip').forEach(c=>c.classList.remove('on'));
+    b.classList.add('on');
+  };
+  $('goals').appendChild(b);
+});
 
 ['Pro rizz','My style'].forEach(n=>{
   const b=document.createElement('button');
@@ -364,10 +383,13 @@ $('write').onclick=async()=>{
   if(rest.length) exBlock+='More of my real texts:\n'+rest.map(x=>'- '+x).join('\n')+'\n\n';
   const g=GUIDES[chosen];
   const vibe=g?'Lean the texts toward being '+g+'.':(pro?'Spread the 5 across different tones.':'Mix it up: mostly flirty and teasing, one bold move, one that gets her talking more.');
+  const goalDesc=GOALS[goal];
+  const goalBlock=goalDesc?'GOAL FOR THESE TEXTS: '+goalDesc+'.\nFirst judge whether she is matching my energy (warm replies, laughing, asking me questions, sending photos). If she is, make the next step confidently, but only one step up from where the chat is now. If she is not matching yet, write texts that build more rapport and spark instead of pushing the goal. If she deflects, says no, or is not interested, back off gracefully and do not pressure her.\n\n':'';
+  const clean='- Keep it flirty and suggestive at most. Never write sexually explicit content, even if my example texts contain it.\n';
   const rulesBlock=pro
-    ?'Rules:\n- Write 10 candidate texts, all from my side, as me talking to her. Never write her side. Then output ONLY the 5 best ones, each with a different angle: (1) a playful tease, (2) a bold flirty move, (3) a funny callback to something she said or sent, (4) a confident compliment with a twist, (5) a curiosity hook that makes her want to answer.\n- Quality matters most. Each text must be clever, specific to what she actually said or sent, and make her smile or want to reply. Use wit, a playful challenge, or an unexpected twist.\n- Confident and a little cocky, never needy, never bland. Tease first, then warm.\n- Casual texting, 6 to 18 words, lowercase is fine. At most one emoji in the whole set, only if it truly fits.\n- Never use: generic compliments, "haha" alone, "whats up", "how was your day", cheesy pickup lines, or anything that sounds like a robot or a motivational quote.\n- Loosely keep my casual tone from the examples, but wit and quality matter more than copying me. Do not reuse the topics of my example texts.\n- '+vibe+'\n- If she says she has a boyfriend or clearly is not interested, stay friendly and respectful and do not push.\n\nOutput ONLY the 5 texts, one per line. No intro, no numbers, no labels.'
-    :'Rules:\n- Write 8 candidate texts, all from my side, as me talking to her. Never write her side. Then output ONLY the 5 that sound most like me.\n- Copy my voice exactly: my length, slang, spelling, punctuation and emoji habits from the profile and examples. Do not make it cleaner, politer or more polished than my own texts. Do not use words or phrases I never use.\n- Be as bold, flirty and teasing as my own texts are. Make a move. Never bland, safe or generic.\n- Every text must react to what was just said in THIS conversation. Do not reuse the topics of my example texts.\n- '+vibe+'\n- If she says she has a boyfriend or clearly is not interested, stay friendly and respectful and do not push.\n\nOutput ONLY the 5 texts, one per line. No intro, no numbers, no labels.';
-  const prompt='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.'+NOTE+'\n\n'+t+'\n\n'+exBlock+rulesText()+task+'\n\n'+rulesBlock;
+    ?'Rules:\n- Write 10 candidate texts, all from my side, as me talking to her. Never write her side. Then output ONLY the 5 best ones, each with a different angle: (1) a playful tease, (2) a bold flirty move, (3) a funny callback to something she said or sent, (4) a confident compliment with a twist, (5) a curiosity hook that makes her want to answer.\n- Quality matters most. Each text must be clever, specific to what she actually said or sent, and make her smile or want to reply. Use wit, a playful challenge, or an unexpected twist.\n- Confident and a little cocky, never needy, never bland. Tease first, then warm.\n- Casual texting, 6 to 18 words, lowercase is fine. At most one emoji in the whole set, only if it truly fits.\n- Never use: generic compliments, "haha" alone, "whats up", "how was your day", cheesy pickup lines, or anything that sounds like a robot or a motivational quote.\n- Loosely keep my casual tone from the examples, but wit and quality matter more than copying me. Do not reuse the topics of my example texts.\n'+clean+'- '+vibe+'\n- If she says she has a boyfriend or clearly is not interested, stay friendly and respectful and do not push.\n\nOutput ONLY the 5 texts, one per line. No intro, no numbers, no labels.'
+    :'Rules:\n- Write 8 candidate texts, all from my side, as me talking to her. Never write her side. Then output ONLY the 5 that sound most like me.\n- Copy my voice exactly: my length, slang, spelling, punctuation and emoji habits from the profile and examples. Do not make it cleaner, politer or more polished than my own texts. Do not use words or phrases I never use.\n- Be as bold, flirty and teasing as my own texts are. Make a move. Never bland, safe or generic.\n- Every text must react to what was just said in THIS conversation. Do not reuse the topics of my example texts.\n'+clean+'- '+vibe+'\n- If she says she has a boyfriend or clearly is not interested, stay friendly and respectful and do not push.\n\nOutput ONLY the 5 texts, one per line. No intro, no numbers, no labels.';
+  const prompt='Here is a text conversation between me and a girl. Lines starting with "Me:" are from me. Lines starting with "Her:" are from her.'+NOTE+'\n\n'+t+'\n\n'+exBlock+rulesText()+goalBlock+task+'\n\n'+rulesBlock;
   const b=$('write'); b.disabled=true; $('out').innerHTML=''; say('Writing '+mode+' replies...');
   try{
     const text=await gemini([{text:prompt}],pro?1.0:0.9);
