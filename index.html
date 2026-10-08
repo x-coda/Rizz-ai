@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Rizz AI">
 <title>Rizz AI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 body{background:#0b0f14;color:#fff;font-family:-apple-system,sans-serif;margin:0;padding:20px}
 h1{margin-top:0}
@@ -37,7 +38,11 @@ summary{font-size:16px;color:#9aa4b2}
 <button class="sec" id="saveSet">Save settings</button>
 <button class="sec" id="find">Find available models</button>
 <div id="models"></div>
-<textarea id="imp" style="height:90px" placeholder="Paste your old style lines here (from style.json)"></textarea>
+<div class="status">Import your Instagram export (.zip):</div>
+<input type="text" id="igName" placeholder="Your Instagram name (leave empty to auto-detect)">
+<input type="file" id="igFile" accept=".zip,.json,application/zip,application/json" multiple style="display:none">
+<button class="sec" id="igBtn">Import Instagram export</button>
+<textarea id="imp" style="height:90px" placeholder="Or paste old style lines here (from style.json)"></textarea>
 <button class="sec" id="impBtn">Import style lines</button>
 <button class="sec" id="expBtn">Copy my style (backup)</button>
 <button class="sec" id="profBtn">Build my style profile</button>
@@ -156,6 +161,68 @@ $('expBtn').onclick=async()=>{
   catch(e){say('Could not copy.')}
 };
 
+const fixTxt=s=>{
+  try{
+    const a=new Uint8Array(s.length);
+    for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c>255)return s;a[i]=c}
+    return new TextDecoder('utf-8',{fatal:true}).decode(a);
+  }catch(e){return s}
+};
+const JUNK=/sent an attachment|unsent a message|missed a (video|voice) call|liked a message|shared a (reel|post|story)|^reacted |http|www\./i;
+const EXPLICIT=/\b(dick|cock|pussy|cum|cumming|suck|sucking|nudes?|horny|naked|blowjob|bj|fuck me|sex)\b/i;
+const LAUGH=/(ha){2,}|lol|lmao|lmfao|😂|🤣|😭|💀|😍|🥰|😘|😏|🔥|❤/i;
+
+$('igBtn').onclick=()=>$('igFile').click();
+$('igFile').onchange=async()=>{
+  const fl=[...$('igFile').files];
+  if(!fl.length) return;
+  say('Opening your export...');
+  try{
+    const chunks=[];
+    for(const f of fl){
+      if(/\.zip$/i.test(f.name)){
+        if(!window.JSZip) throw new Error('Zip reader did not load. Reload the page and try again.');
+        const z=await JSZip.loadAsync(f);
+        const names=Object.keys(z.files).filter(n=>!z.files[n].dir&&/messages\/.*message_\d+\.json$/i.test(n));
+        for(let i=0;i<names.length;i++){
+          try{chunks.push(JSON.parse(await z.files[names[i]].async('string')))}catch(e){}
+          if(i%20===0) say('Reading chats... '+i+' of '+names.length);
+        }
+      }else{
+        try{chunks.push(JSON.parse(await f.text()))}catch(e){}
+      }
+    }
+    const good=chunks.filter(c=>c&&Array.isArray(c.messages)&&Array.isArray(c.participants));
+    if(!good.length) throw new Error('No JSON messages found. Request the export again and choose JSON, not HTML.');
+    const two=good.filter(c=>c.participants.length===2);
+    const count={};
+    two.forEach(c=>c.participants.forEach(p=>{const n=fixTxt(p.name||'');count[n]=(count[n]||0)+1}));
+    let me=$('igName').value.trim();
+    if(!me) me=Object.keys(count).sort((a,b)=>count[b]-count[a])[0]||'';
+    if(!me) throw new Error('Could not find your name. Type your Instagram name in the box and try again.');
+    const meL=me.toLowerCase();
+    const mine=[], worked=[];
+    two.forEach(c=>{
+      const ms=c.messages.slice().sort((a,b)=>a.timestamp_ms-b.timestamp_ms);
+      ms.forEach((m,i)=>{
+        if(fixTxt(m.sender_name||'').toLowerCase()!==meL||!m.content) return;
+        const t=fixTxt(m.content).replace(/\s+/g,' ').trim();
+        const w=t.split(' ').length;
+        if(w<2||w>20||t.length>140||JUNK.test(t)||EXPLICIT.test(t)) return;
+        mine.push(t);
+        const nx=ms[i+1];
+        const reacted=(m.reactions||[]).some(r=>fixTxt(r.actor||'').toLowerCase()!==meL);
+        const laughed=nx&&nx.content&&fixTxt(nx.sender_name||'').toLowerCase()!==meL&&(nx.timestamp_ms-m.timestamp_ms)<900000&&LAUGH.test(fixTxt(nx.content));
+        if(reacted||laughed) worked.push(t);
+      });
+    });
+    const m2=pick([...new Set(mine)],1500), w2=pick([...new Set(worked)],300);
+    addUnique('mine',m2); addUnique('stars',w2);
+    say('Done. Found you as "'+me+'" in '+two.length+' chats. Added '+m2.length+' of your messages, '+w2.length+' marked as ones that landed. Now tap Build my style profile.');
+  }catch(e){say('Error: '+e.message)}
+  $('igFile').value='';
+};
+
 async function gemini(parts,temp){
   const key=S.get('key','');
   if(!key) throw new Error('Add your API key in Settings first');
@@ -183,11 +250,11 @@ async function gemini(parts,temp){
 }
 
 $('profBtn').onclick=async()=>{
-  const all=[...new Set([...load('stars'),...load('mine')])];
-  if(all.length<10){say('Add more of your messages first (at least 10).');return}
+  const sample=[...new Set([...pick(load('stars'),30),...pick(load('mine'),40)])];
+  if(sample.length<10){say('Add more of your messages first (at least 10).');return}
   const b=$('profBtn'); b.disabled=true; say('Studying your style...');
   try{
-    const p='Here are real texts I sent to girls:\n'+pick(all,60).map(x=>'- '+x).join('\n')+'\n\nStudy how I text so someone could copy me exactly. Write 10 to 15 short bullet points covering: my usual message length in words, capitalization, punctuation habits, my slang and spelling (quote the exact words I use), whether I use emojis, how bold, flirty and teasing I am, what kind of humor I use, how I make a move, and anything distinctive. Be specific and quote my texts as examples. No generic advice.';
+    const p='Here are real texts I sent to girls:\n'+sample.map(x=>'- '+x).join('\n')+'\n\nStudy how I text so someone could copy me exactly. Ignore any sexually explicit texts and describe the rest. Write 10 to 15 short bullet points covering: my usual message length in words, capitalization, punctuation habits, my slang and spelling (quote the exact words I use), whether I use emojis, how bold, flirty and teasing I am, what kind of humor I use, how I make a move, and anything distinctive. Be specific and quote my texts as examples. No generic advice.';
     const a=(await gemini([{text:p}],0.3)).trim();
     $('prof').value=a; S.set('profile',a);
     say('Style profile saved. You can edit it.');
